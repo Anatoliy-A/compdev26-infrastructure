@@ -1,0 +1,5 @@
+location                     = "West Europe"
+workload_name                = "k8slab"
+aks_node_vm_size             = "Standard_B2ms"
+kubernetes_version           = "1.35"
+aks_stop_schedule_start_time = "2026-10-07T17:00:00+02:00"

@@ -1,0 +1,4 @@
+subscription_id                 = "<azure-subscription-id>"
+tenant_id                       = "<entra-tenant-id>"
+resource_group_name             = "<existing-resource-group-for-the-lab>"
+api_server_authorized_ip_ranges = ["<your-public-ip>/32"]

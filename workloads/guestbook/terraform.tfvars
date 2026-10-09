@@ -1,0 +1,9 @@
+infra_state_key            = "infra.tfstate"
+location                   = "West Europe"
+cosmos_location            = "Sweden Central"
+workload_name              = "guestbook"
+guestbook_namespace        = "guestbook"
+guestbook_service_account  = "guestbook"
+cosmos_database_name       = "guestbook"
+cosmos_container_name      = "entries"
+cosmos_database_throughput = 400

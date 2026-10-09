@@ -1,0 +1,6 @@
+resource_group_name  = "<resource-group-containing-the-state-storage-account>"
+storage_account_name = "<state-storage-account-name>"
+container_name       = "terraform-state"
+key                  = "guestbook.tfstate"
+use_azuread_auth     = true
+tenant_id            = "<entra-tenant-id>"

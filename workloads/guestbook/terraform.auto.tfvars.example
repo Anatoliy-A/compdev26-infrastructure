@@ -1,0 +1,4 @@
+subscription_id            = "<azure-subscription-id>"
+tenant_id                  = "<entra-tenant-id>"
+state_resource_group_name  = "<resource-group-containing-the-state-storage-account>"
+state_storage_account_name = "<state-storage-account-name>"

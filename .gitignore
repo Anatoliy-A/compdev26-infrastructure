@@ -1,0 +1,16 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan*
+*.tfplan
+crash.log
+*.log
+
+# Private per-machine values (subscription, tenant, resource group, state storage, authorized IP, email).
+# Copy the *.example files next to them and fill in your own values.
+terraform.auto.tfvars
+*.tfbackend
+
+# Local documentation and working notes are not published.
+docs/
+AGENTS.md
