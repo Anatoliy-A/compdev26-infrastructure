@@ -19,9 +19,12 @@ Terraform here must not declare objects that Argo CD manages, and the app reposi
 | `infra/` | Virtual network, AKS (Free tier, Azure CNI Overlay with Cilium, OIDC issuer and Workload Identity), managed identities, role assignments, scheduled stop | `infra.tfstate` |
 | `platform/` | Namespaces, cert-manager with Let's Encrypt, the shared Gateway and TLS certificate, Argo CD | `platform.tfstate` |
 | `workloads/guestbook/` | Cosmos DB (free tier), the guestbook managed identity with its federated credential, Cosmos data-plane role | `guestbook.tfstate` |
+| `automation-runner/` | Small AVM-based Linux VM for trusted GitHub Actions jobs, static public IP, NIC NSG and scheduled shutdown | `automation-runner.tfstate` |
 | `scripts/` | One-time helper that creates the remote-state storage account | |
 
-Apply the roots in this order: `infra`, `platform`, `workloads/guestbook`. Each later root reads the earlier state.
+Apply `infra/` first. Then apply `automation-runner/` if the trusted GitHub runner is needed. `platform/` and `workloads/guestbook/` can then be applied from their independent state roots.
+
+The runner uses a dedicated `10.0.1.0/24` subnet; AKS remains in `10.0.0.0/24`. The runner VM is stopped at 17:00 Europe time to control cost. Its SSH public key is supplied through ignored `terraform.auto.tfvars`; private keys and GitHub runner registration tokens never belong in Terraform.
 
 ## Prerequisites
 

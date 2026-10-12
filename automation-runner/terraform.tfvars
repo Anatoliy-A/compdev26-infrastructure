@@ -1,0 +1,6 @@
+infra_state_key          = "infra.tfstate"
+location                 = "West Europe"
+runner_name              = "tfplanrunner"
+runner_vm_size           = "Standard_B2s"
+runner_shutdown_time     = "1700"
+runner_shutdown_timezone = "W. Europe Standard Time"
