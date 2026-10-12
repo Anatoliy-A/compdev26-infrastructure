@@ -86,7 +86,7 @@ jobs:
         run: |
           if [[ "${{ matrix.root }}" == "infra" ]]; then
             echo "TF_VAR_resource_group_name=${{ vars.LAB_RESOURCE_GROUP }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_api_server_authorized_ip_ranges=${{ vars.AKS_AUTHORIZED_IP_RANGES_JSON }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_api_server_authorized_ip_ranges=[\"${{ vars.AKS_AUTHORIZED_IP_CIDR }}\"]" >> "$GITHUB_ENV"
             echo "TF_VAR_aks_admin_principal_id=${{ vars.AKS_ADMIN_PRINCIPAL_ID }}" >> "$GITHUB_ENV"
             echo "TF_VAR_aks_admin_principal_type=${{ vars.AKS_ADMIN_PRINCIPAL_TYPE }}" >> "$GITHUB_ENV"
           elif [[ "${{ matrix.root }}" == "platform" ]]; then
