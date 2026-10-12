@@ -20,16 +20,8 @@ resource "azurerm_role_assignment" "automation_aks_contributor" {
   principal_id         = azurerm_automation_account.this.identity[0].principal_id
 }
 
-resource "azurerm_automation_runbook" "stop_aks" {
-  name                    = "Stop-AksCluster"
-  location                = var.location
-  resource_group_name     = data.azurerm_resource_group.this.name
-  automation_account_name = azurerm_automation_account.this.name
-  log_verbose             = true
-  log_progress            = true
-  runbook_type            = "PowerShell"
-
-  content = <<-PWSH
+locals {
+  stop_aks_runbook_content = <<-PWSH
     param(
       [string]$ResourceGroupName,
       [string]$ClusterName
@@ -42,6 +34,18 @@ resource "azurerm_automation_runbook" "stop_aks" {
 
     Invoke-AzRestMethod -Path $path -Method POST
   PWSH
+}
+
+resource "azurerm_automation_runbook" "stop_aks" {
+  name                    = "Stop-AksCluster"
+  location                = var.location
+  resource_group_name     = data.azurerm_resource_group.this.name
+  automation_account_name = azurerm_automation_account.this.name
+  log_verbose             = true
+  log_progress            = true
+  runbook_type            = "PowerShell"
+
+  content = replace(replace(local.stop_aks_runbook_content, "\r\n", "\n"), "\n", "\r\n")
 }
 
 resource "azurerm_automation_schedule" "stop_aks_weekdays" {
