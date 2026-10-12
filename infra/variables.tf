@@ -8,6 +8,26 @@ variable "tenant_id" {
   type        = string
 }
 
+variable "aks_admin_principal_id" {
+  description = "Object ID of the user, group, or service principal receiving AKS access roles."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-fA-F-]{36}$", var.aks_admin_principal_id))
+    error_message = "aks_admin_principal_id must be a Microsoft Entra object ID GUID."
+  }
+}
+
+variable "aks_admin_principal_type" {
+  description = "Principal type for the AKS access role assignments."
+  type        = string
+
+  validation {
+    condition     = contains(["User", "Group", "ServicePrincipal"], var.aks_admin_principal_type)
+    error_message = "aks_admin_principal_type must be User, Group, or ServicePrincipal."
+  }
+}
+
 variable "resource_group_name" {
   description = "Name of the existing resource group to deploy into."
   type        = string

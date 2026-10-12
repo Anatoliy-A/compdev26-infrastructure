@@ -1,4 +1,6 @@
 subscription_id                 = "<azure-subscription-id>"
 tenant_id                       = "<entra-tenant-id>"
+aks_admin_principal_id          = "<entra-object-id-for-aks-admin>"
+aks_admin_principal_type        = "User"
 resource_group_name             = "<existing-resource-group-for-the-lab>"
 api_server_authorized_ip_ranges = ["<your-public-ip>/32"]
