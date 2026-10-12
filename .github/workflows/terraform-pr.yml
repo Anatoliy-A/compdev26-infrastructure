@@ -11,5 +11,5 @@ jobs:
     uses: ./.github/workflows/terraform-reusable.yml
     with:
       operation: validate
-      roots: '["infra","automation-runner","platform","workloads/guestbook"]'
+      roots: '["infra","platform","workloads/guestbook"]'
       runner: '["ubuntu-latest"]'
