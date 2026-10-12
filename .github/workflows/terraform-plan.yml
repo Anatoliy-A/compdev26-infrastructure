@@ -112,6 +112,8 @@ jobs:
       - name: Set up kubelogin
         if: matrix.root == 'platform'
         uses: azure/use-kubelogin@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Initialize remote state
         run: >-
