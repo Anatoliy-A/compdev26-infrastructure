@@ -29,20 +29,25 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo 'roots=["infra","automation-runner","platform","workloads/guestbook"]' >> "$GITHUB_OUTPUT"
+            echo 'roots=["infra","platform","workloads/guestbook"]' >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           changed="$(git diff --name-only HEAD^ HEAD)"
           roots=()
           if grep -qE '^(infra/|\.github/workflows/)' <<< "$changed"; then
-            roots+=(infra automation-runner platform 'workloads/guestbook')
+            roots+=(infra platform 'workloads/guestbook')
           else
-            grep -q '^automation-runner/' <<< "$changed" && roots+=(automation-runner)
             grep -q '^platform/' <<< "$changed" && roots+=(platform)
             grep -q '^workloads/guestbook/' <<< "$changed" && roots+=('workloads/guestbook')
           fi
-          if ((${#roots[@]} == 0)); then roots+=(infra automation-runner platform 'workloads/guestbook'); fi
+
+          if grep -q '^automation-runner/' <<< "$changed" && ((${#roots[@]} == 0)); then
+            echo 'roots=[]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ((${#roots[@]} == 0)); then roots+=(infra platform 'workloads/guestbook'); fi
           printf 'roots=[' >> "$GITHUB_OUTPUT"
           printf '"%s",' "${roots[@]}" | sed 's/,$//' >> "$GITHUB_OUTPUT"
           printf ']\n' >> "$GITHUB_OUTPUT"
