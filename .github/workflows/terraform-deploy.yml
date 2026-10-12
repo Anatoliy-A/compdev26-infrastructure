@@ -48,6 +48,7 @@ jobs:
           printf ']\n' >> "$GITHUB_OUTPUT"
 
   deploy:
+    name: Terraform plan and apply
     needs: select-roots
     uses: ./.github/workflows/terraform-reusable.yml
     with:
