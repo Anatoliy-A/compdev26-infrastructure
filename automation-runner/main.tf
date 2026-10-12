@@ -13,7 +13,7 @@ module "runner" {
   source  = "Azure/avm-res-compute-virtualmachine/azurerm"
   version = "0.21.0"
 
-  name                = module.naming.names.virtual_machine.name_unique
+  name                = module.naming.names.compute_virtual_machine.name_unique
   location            = var.location
   resource_group_name = local.resource_group_name
   zone                = null
@@ -61,7 +61,7 @@ module "runner" {
           name                          = "ipconfig-primary"
           private_ip_subnet_resource_id = local.runner_subnet_id
           create_public_ip_address      = true
-          public_ip_address_name        = module.naming.names.public_ip.name_unique
+          public_ip_address_name        = module.naming.names.public_ip_address.name_unique
           is_primary_ipconfiguration    = true
         }
       }
