@@ -37,7 +37,7 @@ jobs:
           changed="$(git diff --name-only HEAD^ HEAD)"
           roots=()
 
-          if grep -qE '^(infra/|\.github/workflows/|README\.md$)' <<< "$changed"; then
+          if grep -qE '^(infra/|\.github/workflows/)' <<< "$changed"; then
             roots+=(infra platform 'workloads/guestbook')
           else
             grep -q '^platform/' <<< "$changed" && roots+=(platform)
@@ -89,7 +89,7 @@ jobs:
           if [[ "${{ matrix.root }}" == "infra" ]]; then
             cidr='${{ vars.AKS_AUTHORIZED_IP_CIDR }}'
             if [[ -z "$cidr" || ! "$cidr" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$ ]]; then
-              echo "::error::AKS_AUTHORIZED_IP_CIDR is missing or is not a valid CIDR"
+              echo "::error::Set the lab-plan variable AKS_AUTHORIZED_IP_CIDR to a plain CIDR such as 203.0.113.10/32; do not include quotes, brackets, or JSON."
               exit 1
             fi
             echo "TF_VAR_resource_group_name=${{ vars.LAB_RESOURCE_GROUP }}" >> "$GITHUB_ENV"
