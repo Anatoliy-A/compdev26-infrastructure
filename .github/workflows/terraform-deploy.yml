@@ -1,0 +1,60 @@
+name: terraform-deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  select-roots:
+    runs-on: ubuntu-latest
+    outputs:
+      roots: ${{ steps.select.outputs.roots }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo 'roots=["infra","automation-runner","platform","workloads/guestbook"]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed="$(git diff --name-only HEAD^ HEAD)"
+          roots=()
+          if grep -qE '^(infra/|\.github/workflows/)' <<< "$changed"; then
+            roots+=(infra automation-runner platform 'workloads/guestbook')
+          else
+            grep -q '^automation-runner/' <<< "$changed" && roots+=(automation-runner)
+            grep -q '^platform/' <<< "$changed" && roots+=(platform)
+            grep -q '^workloads/guestbook/' <<< "$changed" && roots+=('workloads/guestbook')
+          fi
+          if ((${#roots[@]} == 0)); then roots+=(infra automation-runner platform 'workloads/guestbook'); fi
+          printf 'roots=[' >> "$GITHUB_OUTPUT"
+          printf '"%s",' "${roots[@]}" | sed 's/,$//' >> "$GITHUB_OUTPUT"
+          printf ']\n' >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: select-roots
+    uses: ./.github/workflows/terraform-reusable.yml
+    with:
+      operation: plan
+      roots: ${{ needs.select-roots.outputs.roots }}
+      runner: '["self-hosted","Linux","X64","azure-lab"]'
+      plan_environment: lab-plan
+      apply: true
+      apply_environment: lab-apply
+    secrets: inherit
