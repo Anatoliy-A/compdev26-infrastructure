@@ -1,0 +1,280 @@
+name: terraform-reusable
+
+on:
+  workflow_call:
+    inputs:
+      operation:
+        required: true
+        type: string
+      roots:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      plan_environment:
+        required: false
+        type: string
+        default: lab-plan
+      apply:
+        required: false
+        type: boolean
+        default: false
+      apply_environment:
+        required: false
+        type: string
+        default: lab-apply
+    secrets:
+      ACME_EMAIL:
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    if: inputs.operation == 'validate'
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJSON(inputs.roots) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.root }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.4
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+
+      - name: Initialize without backend access
+        run: terraform init -backend=false -input=false
+
+      - name: Validate configuration
+        run: terraform validate -no-color
+
+  plan:
+    if: inputs.operation == 'plan'
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    environment: ${{ inputs.plan_environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJSON(inputs.roots) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.root }}
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_USE_OIDC: true
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+      TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+      LAB_RESOURCE_GROUP: ${{ vars.LAB_RESOURCE_GROUP }}
+      AKS_AUTHORIZED_IP_RANGES: ${{ vars.AKS_AUTHORIZED_IP_RANGES }}
+      AKS_ADMIN_PRINCIPAL_ID: ${{ vars.AKS_ADMIN_PRINCIPAL_ID }}
+      AKS_ADMIN_PRINCIPAL_TYPE: ${{ vars.AKS_ADMIN_PRINCIPAL_TYPE }}
+      RUNNER_SSH_PUBLIC_KEY: ${{ vars.RUNNER_SSH_PUBLIC_KEY }}
+      ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.4
+
+      - name: Set up kubelogin
+        if: matrix.root == 'platform'
+        uses: azure/use-kubelogin@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Set root-specific Terraform values
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset TF_VAR_resource_group_name TF_VAR_api_server_authorized_ip_ranges
+          unset TF_VAR_aks_admin_principal_id TF_VAR_aks_admin_principal_type
+          unset TF_VAR_state_resource_group_name TF_VAR_state_storage_account_name
+          unset TF_VAR_acme_email TF_VAR_runner_ssh_public_key
+
+          if [[ "${{ matrix.root }}" == "infra" ]]; then
+            json='['
+            IFS=',' read -ra ranges <<< "$AKS_AUTHORIZED_IP_RANGES"
+            for raw_cidr in "${ranges[@]}"; do
+              cidr="${raw_cidr//[[:space:]]/}"
+              if [[ ! "$cidr" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$ ]]; then
+                echo "::error::AKS_AUTHORIZED_IP_RANGES contains an invalid CIDR: $cidr"
+                exit 1
+              fi
+              json+="\"$cidr\"," 
+            done
+            echo "TF_VAR_resource_group_name=$LAB_RESOURCE_GROUP" >> "$GITHUB_ENV"
+            echo "TF_VAR_api_server_authorized_ip_ranges=${json%,}]" >> "$GITHUB_ENV"
+            echo "TF_VAR_aks_admin_principal_id=$AKS_ADMIN_PRINCIPAL_ID" >> "$GITHUB_ENV"
+            echo "TF_VAR_aks_admin_principal_type=$AKS_ADMIN_PRINCIPAL_TYPE" >> "$GITHUB_ENV"
+          elif [[ "${{ matrix.root }}" == "automation-runner" ]]; then
+            echo "TF_VAR_state_resource_group_name=$TF_STATE_RESOURCE_GROUP" >> "$GITHUB_ENV"
+            echo "TF_VAR_state_storage_account_name=$TF_STATE_STORAGE_ACCOUNT" >> "$GITHUB_ENV"
+            echo "TF_VAR_runner_ssh_public_key=$RUNNER_SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
+          elif [[ "${{ matrix.root }}" == "platform" || "${{ matrix.root }}" == "workloads/guestbook" ]]; then
+            echo "TF_VAR_state_resource_group_name=$TF_STATE_RESOURCE_GROUP" >> "$GITHUB_ENV"
+            echo "TF_VAR_state_storage_account_name=$TF_STATE_STORAGE_ACCOUNT" >> "$GITHUB_ENV"
+          fi
+
+          if [[ "${{ matrix.root }}" == "platform" ]]; then
+            echo "TF_VAR_acme_email=$ACME_EMAIL" >> "$GITHUB_ENV"
+          fi
+
+      - name: Initialize remote state
+        run: >-
+          terraform init -input=false -reconfigure
+          -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}"
+          -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}"
+          -backend-config="container_name=terraform-state"
+          -backend-config="key=${{ matrix.root == 'infra' && 'infra.tfstate' || matrix.root == 'automation-runner' && 'automation-runner.tfstate' || matrix.root == 'platform' && 'platform.tfstate' || 'guestbook.tfstate' }}"
+          -backend-config="use_azuread_auth=true"
+          -backend-config="use_oidc=true"
+          -backend-config="client_id=${ARM_CLIENT_ID}"
+          -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}"
+          -backend-config="tenant_id=${ARM_TENANT_ID}"
+
+      - name: Create plan
+        run: terraform plan -input=false -lock-timeout=5m -out=tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ matrix.root == 'workloads/guestbook' && 'workloads-guestbook' || matrix.root }}
+          path: ${{ matrix.root }}/tfplan
+          if-no-files-found: error
+
+  apply:
+    if: inputs.operation == 'plan' && inputs.apply
+    needs: plan
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    environment: ${{ inputs.apply_environment }}
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_USE_OIDC: true
+      TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+      LAB_RESOURCE_GROUP: ${{ vars.LAB_RESOURCE_GROUP }}
+      AKS_AUTHORIZED_IP_RANGES: ${{ vars.AKS_AUTHORIZED_IP_RANGES }}
+      AKS_ADMIN_PRINCIPAL_ID: ${{ vars.AKS_ADMIN_PRINCIPAL_ID }}
+      AKS_ADMIN_PRINCIPAL_TYPE: ${{ vars.AKS_ADMIN_PRINCIPAL_TYPE }}
+      RUNNER_SSH_PUBLIC_KEY: ${{ vars.RUNNER_SSH_PUBLIC_KEY }}
+      ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.4
+
+      - name: Set up kubelogin
+        uses: azure/use-kubelogin@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Download plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: terraform-plan-*
+          path: plan-artifacts
+          merge-multiple: false
+
+      - name: Apply plans in dependency order
+        shell: bash
+        env:
+          ROOTS: ${{ inputs.roots }}
+        run: |
+          set -euo pipefail
+          mapfile -t roots < <(jq -r '.[]' <<< "$ROOTS")
+          ordered=(infra automation-runner platform workloads/guestbook)
+
+          for root in "${ordered[@]}"; do
+            if [[ ! " ${roots[*]} " =~ " ${root} " ]]; then
+              continue
+            fi
+
+            unset TF_VAR_resource_group_name TF_VAR_api_server_authorized_ip_ranges
+            unset TF_VAR_aks_admin_principal_id TF_VAR_aks_admin_principal_type
+            unset TF_VAR_state_resource_group_name TF_VAR_state_storage_account_name
+            unset TF_VAR_acme_email TF_VAR_runner_ssh_public_key
+
+            if [[ "$root" == "infra" ]]; then
+              json='['
+              IFS=',' read -ra ranges <<< "$AKS_AUTHORIZED_IP_RANGES"
+              for cidr in "${ranges[@]}"; do json+="\"${cidr//[[:space:]]/}\","; done
+              echo "TF_VAR_resource_group_name=$LAB_RESOURCE_GROUP" >> "$GITHUB_ENV"
+              export TF_VAR_resource_group_name="$LAB_RESOURCE_GROUP"
+              export TF_VAR_api_server_authorized_ip_ranges="${json%,}]"
+              export TF_VAR_aks_admin_principal_id="$AKS_ADMIN_PRINCIPAL_ID"
+              export TF_VAR_aks_admin_principal_type="$AKS_ADMIN_PRINCIPAL_TYPE"
+            elif [[ "$root" == "automation-runner" ]]; then
+              export TF_VAR_state_resource_group_name="$TF_STATE_RESOURCE_GROUP"
+              export TF_VAR_state_storage_account_name="$TF_STATE_STORAGE_ACCOUNT"
+              export TF_VAR_runner_ssh_public_key="$RUNNER_SSH_PUBLIC_KEY"
+            elif [[ "$root" == "platform" || "$root" == "workloads/guestbook" ]]; then
+              export TF_VAR_state_resource_group_name="$TF_STATE_RESOURCE_GROUP"
+              export TF_VAR_state_storage_account_name="$TF_STATE_STORAGE_ACCOUNT"
+            fi
+            [[ "$root" == "platform" ]] && export TF_VAR_acme_email="$ACME_EMAIL"
+
+            cd "$GITHUB_WORKSPACE/$root"
+            key="${root//\//-}"
+            case "$root" in
+              infra) state_key="infra.tfstate" ;;
+              automation-runner) state_key="automation-runner.tfstate" ;;
+              platform) state_key="platform.tfstate" ;;
+              workloads/guestbook) state_key="guestbook.tfstate" ;;
+              *) echo "Unknown Terraform root: $root"; exit 1 ;;
+            esac
+            terraform init -input=false -reconfigure \
+              -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
+              -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+              -backend-config="container_name=terraform-state" \
+              -backend-config="key=${state_key}" \
+              -backend-config="use_azuread_auth=true" \
+              -backend-config="use_oidc=true" \
+              -backend-config="client_id=${ARM_CLIENT_ID}" \
+              -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}" \
+              -backend-config="tenant_id=${ARM_TENANT_ID}"
+            terraform apply -input=false -lock-timeout=5m -auto-approve \
+              "$GITHUB_WORKSPACE/plan-artifacts/terraform-plan-$key/tfplan"
+          done
