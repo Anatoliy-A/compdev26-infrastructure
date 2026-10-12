@@ -13,6 +13,10 @@ module "vnet" {
       name             = module.naming.names.virtual_network_subnet.name_unique
       address_prefixes = [module.ip_addresses.address_prefixes["aks"]]
     }
+    runner = {
+      name             = "${module.naming.names.virtual_network_subnet.name_unique}-runner"
+      address_prefixes = [module.ip_addresses.address_prefixes["runner"]]
+    }
   }
 
   role_assignments = {

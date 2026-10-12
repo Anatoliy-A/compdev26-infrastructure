@@ -4,6 +4,7 @@ module "ip_addresses" {
 
   address_space = "10.0.0.0/16"
   address_prefixes = {
-    aks = 24
+    aks    = 24
+    runner = 24
   }
 }

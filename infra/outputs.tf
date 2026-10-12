@@ -35,3 +35,13 @@ output "aks_node_vm_size" {
 output "aks_subnet_cidr" {
   value = module.ip_addresses.address_prefixes["aks"]
 }
+
+output "aks_subnet_id" {
+  description = "Resource ID of the AKS node subnet."
+  value       = module.vnet.subnets["aks"].resource_id
+}
+
+output "runner_subnet_id" {
+  description = "Resource ID of the dedicated subnet for the GitHub Actions runner VM."
+  value       = module.vnet.subnets["runner"].resource_id
+}
