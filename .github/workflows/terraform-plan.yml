@@ -54,7 +54,7 @@ jobs:
 
   plan:
     needs: select-roots
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, azure-lab]
     environment: lab-plan
     strategy:
       fail-fast: false
