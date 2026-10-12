@@ -70,6 +70,10 @@ The `platform` root talks to the cluster, so AKS must be running. The lab stops 
 
 The `terraform-validate` GitHub Actions workflow runs formatting and `terraform validate` for all three roots without Azure credentials or remote-state access. Apply automation is intentionally separate and will require an approved identity and protected environment.
 
+The `terraform-plan` workflow runs after changes reach `main` or by manual dispatch. It selects changed roots and downstream dependents, authenticates with Azure OIDC through the protected `lab-plan` environment, and uploads one plan artifact per root. It never applies changes.
+
+Before enabling `terraform-plan`, configure the `lab-plan` environment with the Azure OIDC application and the private values not present in tracked `terraform.tfvars`: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`, `LAB_RESOURCE_GROUP`, `AKS_AUTHORIZED_IP_RANGES_JSON`, `AKS_ADMIN_PRINCIPAL_ID`, and `AKS_ADMIN_PRINCIPAL_TYPE`. Store the ACME email as the `ACME_EMAIL` secret. Region, VM size, Kubernetes version, workload names, hostnames and Cosmos settings remain in the committed per-root `terraform.tfvars` files.
+
 ## Cost
 
 The lab is designed to stay at or near the cost of the node VMs only: the AKS control plane is on the Free tier, Cosmos DB uses the lifetime free tier, and images are published to GitHub Container Registry. Nothing paid, such as a container registry, private endpoints, or extra node pools, should be added without a deliberate decision.
