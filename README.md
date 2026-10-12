@@ -66,6 +66,10 @@ Quote the `-backend-config` argument in Windows PowerShell 5.1, which otherwise 
 
 The `platform` root talks to the cluster, so AKS must be running. The lab stops the cluster on a schedule to save cost; start it first if it is stopped.
 
+## Pull Requests
+
+The `terraform-validate` GitHub Actions workflow runs formatting and `terraform validate` for all three roots without Azure credentials or remote-state access. Apply automation is intentionally separate and will require an approved identity and protected environment.
+
 ## Cost
 
 The lab is designed to stay at or near the cost of the node VMs only: the AKS control plane is on the Free tier, Cosmos DB uses the lifetime free tier, and images are published to GitHub Container Registry. Nothing paid, such as a container registry, private endpoints, or extra node pools, should be added without a deliberate decision.
