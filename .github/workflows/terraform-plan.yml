@@ -109,6 +109,10 @@ jobs:
         with:
           terraform_version: 1.16.4
 
+      - name: Set up kubelogin
+        if: matrix.root == 'platform'
+        uses: azure/use-kubelogin@v1
+
       - name: Initialize remote state
         run: >-
           terraform init -input=false -reconfigure
@@ -131,6 +135,6 @@ jobs:
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
-          name: terraform-plan-${{ matrix.root }}
+          name: terraform-plan-${{ matrix.root == 'workloads/guestbook' && 'workloads-guestbook' || matrix.root }}
           path: ${{ matrix.root }}/tfplan
           if-no-files-found: error
