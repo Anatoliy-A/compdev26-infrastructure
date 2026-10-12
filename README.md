@@ -72,7 +72,7 @@ The `terraform-validate` GitHub Actions workflow runs formatting and `terraform 
 
 The `terraform-plan` workflow runs after changes reach `main` or by manual dispatch. It selects changed roots and downstream dependents, authenticates with Azure OIDC through the protected `lab-plan` environment, and uploads one plan artifact per root. It never applies changes.
 
-Before enabling `terraform-plan`, configure the `lab-plan` environment with the Azure OIDC application and the private values not present in tracked `terraform.tfvars`: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`, `LAB_RESOURCE_GROUP`, `AKS_AUTHORIZED_IP_RANGES_JSON`, `AKS_ADMIN_PRINCIPAL_ID`, and `AKS_ADMIN_PRINCIPAL_TYPE`. Store the ACME email as the `ACME_EMAIL` secret. Region, VM size, Kubernetes version, workload names, hostnames and Cosmos settings remain in the committed per-root `terraform.tfvars` files.
+Before enabling `terraform-plan`, configure the `lab-plan` environment with the Azure OIDC application and the private values not present in tracked `terraform.tfvars`: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`, `LAB_RESOURCE_GROUP`, `AKS_AUTHORIZED_IP_CIDR`, `AKS_ADMIN_PRINCIPAL_ID`, and `AKS_ADMIN_PRINCIPAL_TYPE`. Set `AKS_AUTHORIZED_IP_CIDR` to your current public IP in CIDR form; the workflow converts it to the Terraform list. Store the ACME email as the `ACME_EMAIL` secret. Region, VM size, Kubernetes version, workload names, hostnames and Cosmos settings remain in the committed per-root `terraform.tfvars` files.
 
 ## Cost
 
