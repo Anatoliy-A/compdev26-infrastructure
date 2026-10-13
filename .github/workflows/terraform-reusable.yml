@@ -239,6 +239,8 @@ jobs:
           set -euo pipefail
           mapfile -t roots < <(jq -r '.[]' <<< "$ROOTS")
           ordered=(infra automation-runner platform workloads/guestbook)
+          infra_changed=false
+          platform_changed=false
 
           for root in "${ordered[@]}"; do
             if [[ ! " ${roots[*]} " =~ " ${root} " ]]; then
@@ -283,7 +285,16 @@ jobs:
               echo "Missing plan status for $root."
               exit 1
             fi
-            if [[ "$(<"$plan_status")" == "false" ]]; then
+            replan=false
+            if [[ "$root" == "platform" && "$infra_changed" == "true" ]]; then
+              replan=true
+            elif [[ "$root" == "workloads/guestbook" && "$infra_changed" == "true" ]]; then
+              replan=true
+            elif [[ "$root" == "workloads/guestbook" && "$platform_changed" == "true" ]]; then
+              replan=true
+            fi
+
+            if [[ "$replan" == "false" && "$(<"$plan_status")" == "false" ]]; then
               echo "Skipping $root: plan has no changes."
               continue
             fi
@@ -297,6 +308,26 @@ jobs:
               -backend-config="client_id=${ARM_CLIENT_ID}" \
               -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}" \
               -backend-config="tenant_id=${ARM_TENANT_ID}"
+            plan_file="$GITHUB_WORKSPACE/plan-artifacts/terraform-plan-$key/tfplan"
+            if [[ "$replan" == "true" ]]; then
+              echo "Re-planning $root after an upstream state change."
+              terraform plan -input=false -lock-timeout=5m -out=tfplan-replanned
+              terraform show -json tfplan-replanned |
+                jq '[.resource_changes[]? | select(any(.change.actions[]; . == "create" or . == "update" or . == "delete"))] | length > 0' \
+                > plan-status-replanned
+              echo "Re-planned $root has changes: $(<plan-status-replanned)"
+              if [[ "$(<plan-status-replanned)" == "false" ]]; then
+                echo "Skipping $root: re-planned state has no changes."
+                continue
+              fi
+              plan_file="$PWD/tfplan-replanned"
+            fi
             terraform apply -input=false -lock-timeout=5m -auto-approve \
-              "$GITHUB_WORKSPACE/plan-artifacts/terraform-plan-$key/tfplan"
+              "$plan_file"
+
+            if [[ "$root" == "infra" ]]; then
+              infra_changed=true
+            elif [[ "$root" == "platform" ]]; then
+              platform_changed=true
+            fi
           done
