@@ -166,13 +166,26 @@ jobs:
           -backend-config="tenant_id=${ARM_TENANT_ID}"
 
       - name: Create plan
-        run: terraform plan -input=false -lock-timeout=5m -out=tfplan
+        shell: bash
+        run: |
+          set +e
+          terraform plan -input=false -lock-timeout=5m -detailed-exitcode -out=tfplan
+          plan_exit_code=$?
+          set -e
+
+          case "$plan_exit_code" in
+            0) echo false > plan-status ;;
+            2) echo true > plan-status ;;
+            *) exit "$plan_exit_code" ;;
+          esac
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan-${{ matrix.root == 'workloads/guestbook' && 'workloads-guestbook' || matrix.root }}
-          path: ${{ matrix.root }}/tfplan
+          path: |
+            ${{ matrix.root }}/tfplan
+            ${{ matrix.root }}/plan-status
           if-no-files-found: error
 
   apply:
@@ -269,6 +282,15 @@ jobs:
               workloads/guestbook) state_key="guestbook.tfstate" ;;
               *) echo "Unknown Terraform root: $root"; exit 1 ;;
             esac
+            plan_status="$GITHUB_WORKSPACE/plan-artifacts/terraform-plan-$key/plan-status"
+            if [[ ! -f "$plan_status" ]]; then
+              echo "Missing plan status for $root."
+              exit 1
+            fi
+            if [[ "$(<"$plan_status")" == "false" ]]; then
+              echo "Skipping $root: plan has no changes."
+              continue
+            fi
             terraform init -input=false -reconfigure \
               -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
               -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
