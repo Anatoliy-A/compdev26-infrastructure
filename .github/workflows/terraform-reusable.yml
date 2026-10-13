@@ -168,16 +168,12 @@ jobs:
       - name: Create plan
         shell: bash
         run: |
-          set +e
-          terraform plan -input=false -lock-timeout=5m -detailed-exitcode -out=tfplan
-          plan_exit_code=$?
-          set -e
-
-          case "$plan_exit_code" in
-            0) echo false > plan-status ;;
-            2) echo true > plan-status ;;
-            *) exit "$plan_exit_code" ;;
-          esac
+          set -euo pipefail
+          terraform plan -input=false -lock-timeout=5m -out=tfplan
+          terraform show -json tfplan |
+            jq '[.resource_changes[]? | select(any(.change.actions[]; . == "create" or . == "update" or . == "delete"))] | length > 0' \
+            > plan-status
+          echo "Plan has changes: $(<plan-status)"
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
