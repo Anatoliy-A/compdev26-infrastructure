@@ -184,9 +184,55 @@ jobs:
             ${{ matrix.root }}/plan-status
           if-no-files-found: error
 
-  apply-infra:
+  decide-apply:
     if: inputs.operation == 'plan' && inputs.apply
     needs: plan
+    runs-on: ubuntu-latest
+    outputs:
+      infra_changed: ${{ steps.decide.outputs.infra_changed }}
+      downstream_changed: ${{ steps.decide.outputs.downstream_changed }}
+    steps:
+      - name: Download plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: terraform-plan-*
+          path: plan-artifacts
+          merge-multiple: false
+
+      - name: Decide apply stages
+        id: decide
+        shell: bash
+        env:
+          ROOTS: ${{ inputs.roots }}
+        run: |
+          set -euo pipefail
+          mapfile -t roots < <(jq -r '.[]' <<< "$ROOTS")
+          infra_changed=false
+          downstream_changed=false
+
+          if [[ " ${roots[*]} " =~ " infra " ]]; then
+            if [[ "$(<"$GITHUB_WORKSPACE/plan-artifacts/terraform-plan-infra/plan-status")" == "true" ]]; then
+              infra_changed=true
+            fi
+          fi
+
+          for root in platform workloads/guestbook; do
+            if [[ " ${roots[*]} " =~ " ${root} " ]]; then
+              key="${root//\//-}"
+              if [[ "$(<"$GITHUB_WORKSPACE/plan-artifacts/terraform-plan-$key/plan-status")" == "true" ]]; then
+                downstream_changed=true
+              fi
+            fi
+          done
+
+          echo "infra_changed=$infra_changed" >> "$GITHUB_OUTPUT"
+          echo "downstream_changed=$downstream_changed" >> "$GITHUB_OUTPUT"
+          echo "Initial infra changes: $infra_changed"
+          echo "Initial downstream changes: $downstream_changed"
+
+  apply-infra:
+    if: inputs.operation == 'plan' && inputs.apply && needs.decide-apply.outputs.infra_changed == 'true'
+    needs: decide-apply
     runs-on: ${{ fromJSON(inputs.runner) }}
     environment: ${{ inputs.apply_environment }}
     env:
@@ -256,8 +302,8 @@ jobs:
             "$plan_dir/tfplan"
 
   replan-downstream:
-    if: inputs.operation == 'plan' && inputs.apply
-    needs: apply-infra
+    if: always() && inputs.operation == 'plan' && inputs.apply && needs.decide-apply.outputs.infra_changed == 'true'
+    needs: [decide-apply, apply-infra]
     runs-on: ${{ fromJSON(inputs.runner) }}
     environment: ${{ inputs.plan_environment }}
     env:
@@ -343,9 +389,31 @@ jobs:
           path: replan-artifacts
           if-no-files-found: error
 
+      - name: Publish re-plan decision
+        id: replan-decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          downstream_changed=false
+          while IFS= read -r status_file; do
+            if [[ "$(<"$status_file")" == "true" ]]; then
+              downstream_changed=true
+            fi
+          done < <(find "$GITHUB_WORKSPACE/replan-artifacts" -name plan-status-replanned -type f)
+          echo "downstream_changed=$downstream_changed" >> "$GITHUB_OUTPUT"
+          echo "Re-planned downstream changes: $downstream_changed"
+
+    outputs:
+      downstream_changed: ${{ steps.replan-decision.outputs.downstream_changed }}
+
   apply-downstream:
-    if: inputs.operation == 'plan' && inputs.apply
-    needs: replan-downstream
+    if: >-
+      always() && inputs.operation == 'plan' && inputs.apply &&
+      ((needs.decide-apply.outputs.infra_changed == 'true' && needs.replan-downstream.outputs.downstream_changed == 'true') ||
+      (needs.decide-apply.outputs.infra_changed != 'true' && needs.decide-apply.outputs.downstream_changed == 'true')) &&
+      (needs.apply-infra.result == 'success' || needs.apply-infra.result == 'skipped') &&
+      (needs.replan-downstream.result == 'success' || needs.replan-downstream.result == 'skipped')
+    needs: [decide-apply, apply-infra, replan-downstream]
     runs-on: ${{ fromJSON(inputs.runner) }}
     environment: ${{ inputs.apply_environment }}
     env:
@@ -357,6 +425,7 @@ jobs:
       ARM_USE_OIDC: true
       TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
       TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+      USE_REPLANS: ${{ needs.decide-apply.outputs.infra_changed }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -372,7 +441,15 @@ jobs:
         with:
           terraform_version: 1.16.4
 
+      - name: Download initial plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: terraform-plan-*
+          path: plan-artifacts
+          merge-multiple: false
+
       - name: Download re-planned artifacts
+        if: needs.decide-apply.outputs.infra_changed == 'true'
         uses: actions/download-artifact@v4
         with:
           name: terraform-replan-artifacts
@@ -390,13 +467,23 @@ jobs:
               continue
             fi
             key="${root//\//-}"
-            plan_dir="$GITHUB_WORKSPACE/replan-artifacts/terraform-plan-$key"
-            if [[ ! -f "$plan_dir/plan-status-replanned" ]]; then
-              echo "Missing re-planned status for $root."
+            if [[ "$USE_REPLANS" == "true" ]]; then
+              plan_dir="$GITHUB_WORKSPACE/replan-artifacts/terraform-plan-$key"
+              plan_file="$plan_dir/tfplan-replanned"
+              plan_status="$plan_dir/plan-status-replanned"
+              plan_status_label="re-planned"
+            else
+              plan_dir="$GITHUB_WORKSPACE/plan-artifacts/terraform-plan-$key"
+              plan_file="$plan_dir/tfplan"
+              plan_status="$plan_dir/plan-status"
+              plan_status_label="initial"
+            fi
+            if [[ ! -f "$plan_status" || ! -f "$plan_file" ]]; then
+              echo "Missing $plan_status_label plan artifacts for $root."
               exit 1
             fi
-            if [[ "$(<"$plan_dir/plan-status-replanned")" == "false" ]]; then
-              echo "Skipping $root: re-planned state has no changes."
+            if [[ "$(<"$plan_status")" == "false" ]]; then
+              echo "Skipping $root: $plan_status_label plan has no changes."
               continue
             fi
             if [[ "$root" == "platform" ]]; then
@@ -416,5 +503,5 @@ jobs:
               -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}" \
               -backend-config="tenant_id=${ARM_TENANT_ID}"
             terraform apply -input=false -lock-timeout=5m -auto-approve \
-              "$plan_dir/tfplan-replanned"
+              "$plan_file"
           done
