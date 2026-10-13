@@ -184,7 +184,7 @@ jobs:
             ${{ matrix.root }}/plan-status
           if-no-files-found: error
 
-  apply:
+  apply-infra:
     if: inputs.operation == 'plan' && inputs.apply
     needs: plan
     runs-on: ${{ fromJSON(inputs.runner) }}
@@ -196,15 +196,81 @@ jobs:
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_USE_OIDC: true
-      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      TF_VAR_tenant_id: ${{ vars.AZURE_TENANT_ID }}
       TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
       TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
       LAB_RESOURCE_GROUP: ${{ vars.LAB_RESOURCE_GROUP }}
       AKS_AUTHORIZED_IP_RANGES: ${{ vars.AKS_AUTHORIZED_IP_RANGES }}
       AKS_ADMIN_PRINCIPAL_ID: ${{ vars.AKS_ADMIN_PRINCIPAL_ID }}
       AKS_ADMIN_PRINCIPAL_TYPE: ${{ vars.AKS_ADMIN_PRINCIPAL_TYPE }}
-      RUNNER_SSH_PUBLIC_KEY: ${{ vars.RUNNER_SSH_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.4
+
+      - name: Download plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: terraform-plan-*
+          path: plan-artifacts
+          merge-multiple: false
+
+      - name: Apply infra plan
+        if: contains(inputs.roots, 'infra')
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan_dir="$GITHUB_WORKSPACE/plan-artifacts/terraform-plan-infra"
+          if [[ "$(<"$plan_dir/plan-status")" == "false" ]]; then
+            echo "Skipping infra: plan has no changes."
+            exit 0
+          fi
+          json='['
+          IFS=',' read -ra ranges <<< "$AKS_AUTHORIZED_IP_RANGES"
+          for cidr in "${ranges[@]}"; do json+="\"${cidr//[[:space:]]/}\","; done
+          export TF_VAR_resource_group_name="$LAB_RESOURCE_GROUP"
+          export TF_VAR_api_server_authorized_ip_ranges="${json%,}]"
+          export TF_VAR_aks_admin_principal_id="$AKS_ADMIN_PRINCIPAL_ID"
+          export TF_VAR_aks_admin_principal_type="$AKS_ADMIN_PRINCIPAL_TYPE"
+          cd "$GITHUB_WORKSPACE/infra"
+          terraform init -input=false -reconfigure \
+            -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
+            -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+            -backend-config="container_name=terraform-state" \
+            -backend-config="key=infra.tfstate" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true" \
+            -backend-config="client_id=${ARM_CLIENT_ID}" \
+            -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}" \
+            -backend-config="tenant_id=${ARM_TENANT_ID}"
+          terraform apply -input=false -lock-timeout=5m -auto-approve \
+            "$plan_dir/tfplan"
+
+  replan-downstream:
+    if: inputs.operation == 'plan' && inputs.apply
+    needs: apply-infra
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    environment: ${{ inputs.plan_environment }}
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_USE_OIDC: true
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+      TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
       ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
     steps:
       - uses: actions/checkout@v7
@@ -226,80 +292,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Download plan artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: terraform-plan-*
-          path: plan-artifacts
-          merge-multiple: false
-
-      - name: Apply plans in dependency order
+      - name: Re-plan downstream roots
         shell: bash
         env:
           ROOTS: ${{ inputs.roots }}
         run: |
           set -euo pipefail
           mapfile -t roots < <(jq -r '.[]' <<< "$ROOTS")
-          ordered=(infra automation-runner platform workloads/guestbook)
-          infra_changed=false
-          platform_changed=false
-
-          for root in "${ordered[@]}"; do
-            if [[ ! " ${roots[*]} " =~ " ${root} " ]]; then
+          for root in platform workloads/guestbook; do
+            if [[ "$root" == "platform" && ! " ${roots[*]} " =~ " infra " && ! " ${roots[*]} " =~ " platform " ]]; then
               continue
             fi
-
-            unset TF_VAR_resource_group_name TF_VAR_api_server_authorized_ip_ranges
-            unset TF_VAR_aks_admin_principal_id TF_VAR_aks_admin_principal_type
-            unset TF_VAR_state_resource_group_name TF_VAR_state_storage_account_name
-            unset TF_VAR_acme_email TF_VAR_runner_ssh_public_key
-
-            if [[ "$root" == "infra" ]]; then
-              json='['
-              IFS=',' read -ra ranges <<< "$AKS_AUTHORIZED_IP_RANGES"
-              for cidr in "${ranges[@]}"; do json+="\"${cidr//[[:space:]]/}\","; done
-              echo "TF_VAR_resource_group_name=$LAB_RESOURCE_GROUP" >> "$GITHUB_ENV"
-              export TF_VAR_resource_group_name="$LAB_RESOURCE_GROUP"
-              export TF_VAR_api_server_authorized_ip_ranges="${json%,}]"
-              export TF_VAR_aks_admin_principal_id="$AKS_ADMIN_PRINCIPAL_ID"
-              export TF_VAR_aks_admin_principal_type="$AKS_ADMIN_PRINCIPAL_TYPE"
-            elif [[ "$root" == "automation-runner" ]]; then
-              export TF_VAR_state_resource_group_name="$TF_STATE_RESOURCE_GROUP"
-              export TF_VAR_state_storage_account_name="$TF_STATE_STORAGE_ACCOUNT"
-              export TF_VAR_runner_ssh_public_key="$RUNNER_SSH_PUBLIC_KEY"
-            elif [[ "$root" == "platform" || "$root" == "workloads/guestbook" ]]; then
-              export TF_VAR_state_resource_group_name="$TF_STATE_RESOURCE_GROUP"
-              export TF_VAR_state_storage_account_name="$TF_STATE_STORAGE_ACCOUNT"
+            if [[ "$root" == "workloads/guestbook" && ! " ${roots[*]} " =~ " infra " && ! " ${roots[*]} " =~ " workloads/guestbook " ]]; then
+              continue
             fi
-            [[ "$root" == "platform" ]] && export TF_VAR_acme_email="$ACME_EMAIL"
-
+            if [[ "$root" == "platform" ]]; then
+              state_key=platform.tfstate
+              export TF_VAR_acme_email="$ACME_EMAIL"
+            else
+              state_key=guestbook.tfstate
+              unset TF_VAR_acme_email
+            fi
+            export TF_VAR_state_resource_group_name="$TF_STATE_RESOURCE_GROUP"
+            export TF_VAR_state_storage_account_name="$TF_STATE_STORAGE_ACCOUNT"
             cd "$GITHUB_WORKSPACE/$root"
-            key="${root//\//-}"
-            case "$root" in
-              infra) state_key="infra.tfstate" ;;
-              automation-runner) state_key="automation-runner.tfstate" ;;
-              platform) state_key="platform.tfstate" ;;
-              workloads/guestbook) state_key="guestbook.tfstate" ;;
-              *) echo "Unknown Terraform root: $root"; exit 1 ;;
-            esac
-            plan_status="$GITHUB_WORKSPACE/plan-artifacts/terraform-plan-$key/plan-status"
-            if [[ ! -f "$plan_status" ]]; then
-              echo "Missing plan status for $root."
-              exit 1
-            fi
-            replan=false
-            if [[ "$root" == "platform" && "$infra_changed" == "true" ]]; then
-              replan=true
-            elif [[ "$root" == "workloads/guestbook" && "$infra_changed" == "true" ]]; then
-              replan=true
-            elif [[ "$root" == "workloads/guestbook" && "$platform_changed" == "true" ]]; then
-              replan=true
-            fi
-
-            if [[ "$replan" == "false" && "$(<"$plan_status")" == "false" ]]; then
-              echo "Skipping $root: plan has no changes."
-              continue
-            fi
             terraform init -input=false -reconfigure \
               -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
               -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
@@ -310,26 +326,95 @@ jobs:
               -backend-config="client_id=${ARM_CLIENT_ID}" \
               -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}" \
               -backend-config="tenant_id=${ARM_TENANT_ID}"
-            plan_file="$GITHUB_WORKSPACE/plan-artifacts/terraform-plan-$key/tfplan"
-            if [[ "$replan" == "true" ]]; then
-              echo "Re-planning $root after an upstream state change."
-              terraform plan -input=false -lock-timeout=5m -out=tfplan-replanned
-              terraform show -json tfplan-replanned |
-                jq '[.resource_changes[]? | select(any(.change.actions[]; . == "create" or . == "update" or . == "delete"))] | length > 0' \
-                > plan-status-replanned
-              echo "Re-planned $root has changes: $(<plan-status-replanned)"
-              if [[ "$(<plan-status-replanned)" == "false" ]]; then
-                echo "Skipping $root: re-planned state has no changes."
-                continue
-              fi
-              plan_file="$PWD/tfplan-replanned"
-            fi
-            terraform apply -input=false -lock-timeout=5m -auto-approve \
-              "$plan_file"
+            terraform plan -input=false -lock-timeout=5m -out=tfplan-replanned
+            terraform show -json tfplan-replanned |
+              jq '[.resource_changes[]? | select(any(.change.actions[]; . == "create" or . == "update" or . == "delete"))] | length > 0' \
+              > plan-status-replanned
+            echo "Re-planned $root has changes: $(<plan-status-replanned)"
+            key="${root//\//-}"
+            mkdir -p "$GITHUB_WORKSPACE/replan-artifacts/terraform-plan-$key"
+            cp tfplan-replanned plan-status-replanned "$GITHUB_WORKSPACE/replan-artifacts/terraform-plan-$key/"
+          done
 
-            if [[ "$root" == "infra" ]]; then
-              infra_changed=true
-            elif [[ "$root" == "platform" ]]; then
-              platform_changed=true
+      - name: Upload re-planned artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-replan-artifacts
+          path: replan-artifacts
+          if-no-files-found: error
+
+  apply-downstream:
+    if: inputs.operation == 'plan' && inputs.apply
+    needs: replan-downstream
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    environment: ${{ inputs.apply_environment }}
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_USE_OIDC: true
+      TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.4
+
+      - name: Download re-planned artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-replan-artifacts
+          path: replan-artifacts
+
+      - name: Apply re-planned downstream roots
+        shell: bash
+        env:
+          ROOTS: ${{ inputs.roots }}
+        run: |
+          set -euo pipefail
+          mapfile -t roots < <(jq -r '.[]' <<< "$ROOTS")
+          for root in platform workloads/guestbook; do
+            if [[ ! " ${roots[*]} " =~ " ${root} " && ! " ${roots[*]} " =~ " infra " ]]; then
+              continue
             fi
+            key="${root//\//-}"
+            plan_dir="$GITHUB_WORKSPACE/replan-artifacts/terraform-plan-$key"
+            if [[ ! -f "$plan_dir/plan-status-replanned" ]]; then
+              echo "Missing re-planned status for $root."
+              exit 1
+            fi
+            if [[ "$(<"$plan_dir/plan-status-replanned")" == "false" ]]; then
+              echo "Skipping $root: re-planned state has no changes."
+              continue
+            fi
+            if [[ "$root" == "platform" ]]; then
+              state_key=platform.tfstate
+            else
+              state_key=guestbook.tfstate
+            fi
+            cd "$GITHUB_WORKSPACE/$root"
+            terraform init -input=false -reconfigure \
+              -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
+              -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+              -backend-config="container_name=terraform-state" \
+              -backend-config="key=${state_key}" \
+              -backend-config="use_azuread_auth=true" \
+              -backend-config="use_oidc=true" \
+              -backend-config="client_id=${ARM_CLIENT_ID}" \
+              -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}" \
+              -backend-config="tenant_id=${ARM_TENANT_ID}"
+            terraform apply -input=false -lock-timeout=5m -auto-approve \
+              "$plan_dir/tfplan-replanned"
           done
